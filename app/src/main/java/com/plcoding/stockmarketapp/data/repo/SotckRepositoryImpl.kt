@@ -1,6 +1,8 @@
 package com.plcoding.stockmarketapp.data.repo
 
+import com.plcoding.stockmarketapp.data.csv.CsvParser
 import com.plcoding.stockmarketapp.data.local.StockDatabase
+import com.plcoding.stockmarketapp.data.mappers.toCompanyListingEntity
 import com.plcoding.stockmarketapp.data.mappers.toCompanyListingModel
 import com.plcoding.stockmarketapp.data.remote.dto.StockApi
 import com.plcoding.stockmarketapp.domain.model.CompanyListingModel
@@ -15,8 +17,9 @@ import javax.inject.Singleton
 
 @Singleton
 class StockRepositoryImpl @Inject constructor(
-    private val api : StockApi,
-    private val db : StockDatabase
+    private val api: StockApi,
+    private val db: StockDatabase,
+    private val companyListingParser: CsvParser<CompanyListingModel>
 ) : StockRepository {
 
     private val dao = db.dao
@@ -35,22 +38,37 @@ class StockRepositoryImpl @Inject constructor(
             val isDbEmpty = localListings.isEmpty() && query.isBlank()
             val shouldLoadFromCache = !isDbEmpty && !fetchFromRemote
 
-            if(shouldLoadFromCache) {
+            if (shouldLoadFromCache) {
                 emit(Resource.Loading(false))
                 return@flow
             }
 
-            val remoteListings = try{
-
+            val remoteListings = try {
                 val response = api.getListings()
-                response.byteStream()
-
+                companyListingParser.parse(response.byteStream())
             } catch (e: IOException) {
                 e.printStackTrace()
                 emit(Resource.Error("Couldn't load data"))
-            } catch (e : HttpException) {
+                null
+            } catch (e: HttpException) {
                 e.printStackTrace()
                 emit(Resource.Error("Couldn't load data"))
+                null
+            }
+
+            remoteListings?.let { it ->
+                dao.clearCompanyListings()
+                dao.insertCompanyListings(
+                    it.map {
+                        it.toCompanyListingEntity()
+                    }
+                )
+                emit(Resource.Success(
+                    data = dao
+                        .searchCompanyListings("")
+                        .map { it.toCompanyListingModel() }
+                ))
+                emit(Resource.Loading(false))
             }
         }
     }
